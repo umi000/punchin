@@ -49,9 +49,7 @@ const CONFIG = {
         accuracyMeters: 76431,
         address: null
     },
-    medium: "WEBSITE",
-    // Allow manual override of attendance ID via environment variable
-    manualAttendanceId: process.env.ATTENDANCE_ID ? Number.parseInt(process.env.ATTENDANCE_ID, 10) : null
+    medium: "WEBSITE"
 };
 
 // Common headers for API requests
@@ -128,155 +126,37 @@ async function getAuthToken() {
 }
 
 /**
- * Get current attendance record to find attendance ID for check-out
+ * Get current attendance ID from status API for check-out
  * @param {string} token - Authentication token
  * @returns {Promise<number|null>} Attendance ID or null
  */
 async function getCurrentAttendanceId(token) {
     try {
-        console.log('📋 Fetching current attendance record...');
-        
-        // Try multiple possible endpoints with different query parameters
-        const today = new Date().toISOString().split('T')[0];
-        const endpoints = [
-            // Base endpoint - might return all records or today's record
-            `${CONFIG.baseUrl}/api/organizations/${CONFIG.organizationId}/attendance/employee/${CONFIG.employeeId}`,
-            // With date query parameter
-            `${CONFIG.baseUrl}/api/organizations/${CONFIG.organizationId}/attendance/employee/${CONFIG.employeeId}?date=${today}`,
-            // With today query parameter
-            `${CONFIG.baseUrl}/api/organizations/${CONFIG.organizationId}/attendance/employee/${CONFIG.employeeId}?today=true`,
-            // Specific today endpoint
-            `${CONFIG.baseUrl}/api/organizations/${CONFIG.organizationId}/attendance/employee/${CONFIG.employeeId}/today`,
-            // Current/active endpoint
-            `${CONFIG.baseUrl}/api/organizations/${CONFIG.organizationId}/attendance/employee/${CONFIG.employeeId}/current`,
-            // With limit to get recent records
-            `${CONFIG.baseUrl}/api/organizations/${CONFIG.organizationId}/attendance/employee/${CONFIG.employeeId}?limit=10&sort=desc`
-        ];
-
-        let response = null;
-        let lastError = null;
-
-        // Try each endpoint until one works
-        for (const endpoint of endpoints) {
-            try {
-                console.log(`   Trying endpoint: ${endpoint}`);
-                response = await axios.get(endpoint, {
-                    headers: getHeaders(token),
-                    timeout: 10000,
-                    validateStatus: function (status) {
-                        // Don't throw for any status, we'll check it manually
-                        return status < 600;
-                    }
-                });
-                
-                // Check if response indicates an error
-                if (response.status >= 400 || response.data?.success === false || response.data?.status >= 400) {
-                    console.log(`   ⚠️  Endpoint returned error: ${response.status} - ${response.data?.message || 'Unknown error'}`);
-                    lastError = { response: { status: response.status, data: response.data } };
-                    response = null;
-                    continue;
-                }
-                
-                console.log(`   ✅ Successfully fetched from endpoint`);
-                break;
-            } catch (err) {
-                lastError = err;
-                console.log(`   ⚠️  Endpoint failed: ${err.response?.status || err.message}`);
-                response = null;
-                continue;
+        console.log('📋 Fetching attendance status...');
+        const response = await axios.get(
+            `${CONFIG.baseUrl}/api/organizations/${CONFIG.organizationId}/employee-self/${CONFIG.employeeId}/attendance/status`,
+            {
+                headers: getHeaders(token),
+                timeout: 10000
             }
+        );
+
+        // Extract attendance ID from response
+        const attendanceId = response.data?.data?.id || 
+                             response.data?.id || 
+                             response.data?.attendanceId ||
+                             response.data?.data?.attendanceId;
+
+        if (attendanceId) {
+            console.log(`✅ Found attendance ID: ${attendanceId}`);
+            return attendanceId;
         }
 
-        if (!response) {
-            console.error('⚠️  All endpoints failed. Last error:', lastError?.response?.data?.message || lastError?.message);
-            return null;
-        }
-
-        // Log the full response structure for debugging
-        console.log('📄 API Response structure:', JSON.stringify(response.data, null, 2));
-
-        // Try to find today's check-in record
-        const todayLocal = new Date().toLocaleDateString('en-CA'); // YYYY-MM-DD format
-        
-        // Handle different response structures
-        let attendance = response.data?.data || response.data?.attendance || response.data;
-        
-        // If it's an array, find today's record
-        if (Array.isArray(attendance)) {
-            console.log(`   Found ${attendance.length} attendance records`);
-            
-            // Try multiple strategies to find today's record
-            const todayRecord = attendance.find(record => {
-                if (!record) return false;
-                
-                // Strategy 1: Check if checkOutTime is null/undefined and date matches
-                const recordDate = record.checkInTime 
-                    ? new Date(record.checkInTime).toISOString().split('T')[0]
-                    : record.createdAt 
-                    ? new Date(record.createdAt).toISOString().split('T')[0]
-                    : null;
-                
-                const isToday = recordDate === today || recordDate === todayLocal;
-                const notCheckedOut = !record.checkOutTime || record.checkOutTime === null;
-                
-                console.log(`   Record ID ${record.id}: date=${recordDate}, today=${today}, checkedOut=${!!record.checkOutTime}`);
-                
-                return isToday && notCheckedOut;
-            });
-            
-            if (todayRecord) {
-                console.log(`✅ Found today's attendance record (ID: ${todayRecord.id})`);
-                return todayRecord.id;
-            }
-            
-            // Strategy 2: If no exact match, get the most recent record without check-out
-            const recentRecord = attendance
-                .filter(record => !record.checkOutTime || record.checkOutTime === null)
-                .sort((a, b) => {
-                    const dateA = new Date(a.checkInTime || a.createdAt || 0);
-                    const dateB = new Date(b.checkInTime || b.createdAt || 0);
-                    return dateB - dateA;
-                })[0];
-            
-            if (recentRecord) {
-                const recordDate = recentRecord.checkInTime 
-                    ? new Date(recentRecord.checkInTime).toISOString().split('T')[0]
-                    : recentRecord.createdAt 
-                    ? new Date(recentRecord.createdAt).toISOString().split('T')[0]
-                    : null;
-                
-                console.log(`⚠️  Using most recent unchecked-out record (ID: ${recentRecord.id}, Date: ${recordDate})`);
-                return recentRecord.id;
-            }
-        } 
-        // If it's a single object
-        else if (attendance && typeof attendance === 'object') {
-            // Check if it has an ID and is today's record
-            if (attendance.id) {
-                const recordDate = attendance.checkInTime 
-                    ? new Date(attendance.checkInTime).toISOString().split('T')[0]
-                    : attendance.createdAt 
-                    ? new Date(attendance.createdAt).toISOString().split('T')[0]
-                    : null;
-                
-                const isToday = recordDate === today || recordDate === todayLocal;
-                const notCheckedOut = !attendance.checkOutTime || attendance.checkOutTime === null;
-                
-                if (isToday && notCheckedOut) {
-                    console.log(`✅ Found today's attendance record (ID: ${attendance.id})`);
-                    return attendance.id;
-                } else if (notCheckedOut) {
-                    console.log(`⚠️  Found unchecked-out record (ID: ${attendance.id}, Date: ${recordDate})`);
-                    return attendance.id;
-                }
-            }
-        }
-
-        console.log('⚠️  No active attendance record found for today');
-        console.log('   Full response data:', JSON.stringify(response.data, null, 2));
+        console.log('⚠️  No attendance ID found in status response');
+        console.log('   Response:', JSON.stringify(response.data, null, 2));
         return null;
     } catch (error) {
-        console.error('⚠️  Could not fetch attendance record:');
+        console.error('⚠️  Could not fetch attendance status:');
         if (error.response) {
             console.error('   Status:', error.response.status);
             console.error('   Data:', JSON.stringify(error.response.data, null, 2));
@@ -310,32 +190,12 @@ async function markAttendance(type) {
     if (type === 'check-in') {
         url = `${CONFIG.baseUrl}/api/organizations/${CONFIG.organizationId}/attendance/employee/${CONFIG.employeeId}/check-in`;
     } else if (type === 'check-out') {
-        // For check-out, we need the attendance ID from today's check-in
-        // Priority order:
-        // 1. Manual override via environment variable
-        // 2. Stored file from check-in
-        // 3. API query (if endpoint works)
-        
-        if (CONFIG.manualAttendanceId) {
-            attendanceId = CONFIG.manualAttendanceId;
-            console.log(`🔧 Using manually specified attendance ID: ${attendanceId}`);
-        } else {
-            // First, try to get it from stored file (faster and more reliable)
-            attendanceId = getStoredAttendanceId();
-            
-            // If not found in file, try to fetch from API
-            if (!attendanceId) {
-                console.log('📡 Stored attendance ID not found, querying API...');
-                attendanceId = await getCurrentAttendanceId(token);
-            }
-        }
+        // For check-out, get attendance ID from status API
+        attendanceId = await getCurrentAttendanceId(token);
         
         if (!attendanceId) {
-            console.error('❌ Cannot check-out: No active attendance record found for today');
-            console.error('   Options to fix this:');
-            console.error('   1. Run check-in first to store the attendance ID');
-            console.error('   2. Set ATTENDANCE_ID environment variable: ATTENDANCE_ID=1104 npm run check-out');
-            console.error('   3. Manually create data/attendance-YYYY-MM-DD.json with: {"date":"YYYY-MM-DD","attendanceId":1104}');
+            console.error('❌ Cannot check-out: No active attendance record found');
+            console.error('   Make sure you have checked in first!');
             process.exit(1);
         }
 
@@ -362,29 +222,6 @@ async function markAttendance(type) {
 
         console.log(`✅ Successfully ${type === 'check-in' ? 'Checked In' : 'Checked Out'}!`);
         console.log('📄 Response:', JSON.stringify(response.data, null, 2));
-        
-        // If check-in was successful, extract and store the attendance ID
-        if (type === 'check-in') {
-            const responseData = response.data?.data || response.data;
-            
-            // Try multiple possible locations for the attendance ID
-            const newAttendanceId = responseData?.id || 
-                                   responseData?.attendanceId || 
-                                   responseData?.attendance?.id ||
-                                   responseData?.attendanceId ||
-                                   response.data?.id ||
-                                   response.data?.attendanceId;
-            
-            if (newAttendanceId) {
-                storeAttendanceId(newAttendanceId);
-                console.log(`💾 Stored attendance ID: ${newAttendanceId} for check-out`);
-            } else {
-                console.log('⚠️  Could not extract attendance ID from check-in response');
-                console.log('   Response structure:', JSON.stringify(response.data, null, 2));
-                console.log('   You may need to manually check-out if the API query fails');
-                console.log('   Or manually create data/attendance-YYYY-MM-DD.json with the attendance ID');
-            }
-        }
         
         // Log to file for record keeping
         const logEntry = {
@@ -418,52 +255,6 @@ async function markAttendance(type) {
 
         process.exit(1);
     }
-}
-
-/**
- * Store attendance ID for today's check-in
- * @param {number} attendanceId - The attendance ID to store
- */
-function storeAttendanceId(attendanceId) {
-    const dataDir = path.join(__dirname, 'data');
-    if (!fs.existsSync(dataDir)) {
-        fs.mkdirSync(dataDir, { recursive: true });
-    }
-
-    const today = new Date().toISOString().split('T')[0];
-    const dataFile = path.join(dataDir, `attendance-${today}.json`);
-    
-    const data = {
-        date: today,
-        attendanceId: attendanceId,
-        checkInTime: new Date().toISOString()
-    };
-    
-    fs.writeFileSync(dataFile, JSON.stringify(data, null, 2));
-    console.log(`💾 Stored attendance ID ${attendanceId} for today`);
-}
-
-/**
- * Retrieve stored attendance ID for today
- * @returns {number|null} Attendance ID or null if not found
- */
-function getStoredAttendanceId() {
-    const today = new Date().toISOString().split('T')[0];
-    const dataFile = path.join(__dirname, 'data', `attendance-${today}.json`);
-    
-    if (fs.existsSync(dataFile)) {
-        try {
-            const data = JSON.parse(fs.readFileSync(dataFile, 'utf8'));
-            if (data.attendanceId && data.date === today) {
-                console.log(`📂 Found stored attendance ID: ${data.attendanceId}`);
-                return data.attendanceId;
-            }
-        } catch (e) {
-            console.log(`⚠️  Could not read stored attendance ID: ${e.message}`);
-        }
-    }
-    
-    return null;
 }
 
 /**
