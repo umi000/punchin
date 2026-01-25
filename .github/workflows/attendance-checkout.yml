@@ -1,0 +1,38 @@
+name: Attendance Check-Out
+
+on:
+  schedule:
+    # Runs at the start of check-out window (06:45 PM local time)
+    # Adjust UTC time based on your timezone:
+    # - PKT (UTC+5): 18:45 PKT = 13:45 UTC → cron: '45 13 * * 1-5'
+    # - IST (UTC+5:30): 18:45 IST = 13:15 UTC → cron: '15 13 * * 1-5'
+    # Cron format: minute hour day month weekday
+    # This runs at 13:45 UTC (18:45 PKT) every weekday (Monday-Friday)
+    # Script will add random delay of 0-15 minutes within the window
+    - cron: '45 13 * * 1-5'  # 13:45 UTC = 18:45 PKT (Monday-Friday)
+  workflow_dispatch:  # Allows manual trigger
+
+jobs:
+  check-out:
+    runs-on: ubuntu-latest
+    name: Automated Check-Out
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run check-out
+        env:
+          ATTENDANCE_EMAIL: ${{ secrets.ATTENDANCE_EMAIL }}
+          ATTENDANCE_PASSWORD: ${{ secrets.ATTENDANCE_PASSWORD }}
+        run: npm run check-out
+
