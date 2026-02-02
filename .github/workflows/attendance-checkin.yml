@@ -9,7 +9,7 @@ on:
     # Cron format: minute hour day month weekday
     # This runs at 04:00 UTC (09:00 PKT) every weekday (Monday-Friday)
     # Script will add random delay of 0-14 minutes within the window
-    - cron: '0 4 * * 1-5'  # 04:00 UTC = 09:00 PKT (Monday-Friday)
+    - cron: '0 3 * * 1-5'  # 04:00 UTC = 09:00 PKT (Monday-Friday)
   workflow_dispatch:  # Allows manual trigger
 
 jobs:
