@@ -2,15 +2,10 @@ name: Attendance Check-In
 
 on:
   schedule:
-    # Runs at the start of check-in window (09:00 AM local time)
-    # Adjust UTC time based on your timezone:
-    # - PKT (UTC+5): 09:00 PKT = 04:00 UTC → cron: '0 3 * * 1-5'
-    # - IST (UTC+5:30): 09:00 IST = 03:30 UTC → cron: '0 2 * * 1-5'
-    # Cron format: minute hour day month weekday
-    # This runs at 04:00 UTC (09:00 PKT) every weekday (Monday-Friday)
-    # Script will add random delay of 0-14 minutes within the window
-    - cron: '0 3 * * 1-5'  # 04:00 UTC = 09:00 PKT (Monday-Friday)
-  workflow_dispatch:  # Allows manual trigger
+    # 08:45 AM PKT (UTC+5) = 03:45 AM UTC
+    # Format: minute hour day month weekday (1-5 is Mon-Fri)
+    - cron: '45 3 * * 1-5'
+  workflow_dispatch:  # Allows you to click "Run workflow" manually
 
 jobs:
   check-in:
