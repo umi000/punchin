@@ -4,7 +4,7 @@ on:
   schedule:
     # 08:45 AM PKT (UTC+5) = 03:45 AM UTC
     # Format: minute hour day month weekday (1-5 is Mon-Fri)
-    - cron: '45 2 * * 1-5'
+    - cron: '05 2 * * 1-5'
   workflow_dispatch:  # Allows you to click "Run workflow" manually
 
 jobs:
