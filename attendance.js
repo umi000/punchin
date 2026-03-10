@@ -210,12 +210,22 @@ async function markAttendance(type) {
         console.log(`📤 Sending ${type} request...`);
         
         // Prepare request body
-        const requestBody = {
-            date: new Date().toISOString().split('T')[0], // Format: YYYY-MM-DD
-            location: CONFIG.location,
-            medium: CONFIG.medium,
-            ip: null
-        };
+        const requestBody = type === 'check-in' 
+            ? {
+                date: new Date().toISOString().split('T')[0], // Format: YYYY-MM-DD
+                location: CONFIG.location,
+                medium: CONFIG.medium,
+                ip: null
+            }
+            : {
+                location: {
+                    latitude: CONFIG.location.latitude,
+                    longitude: CONFIG.location.longitude,
+                    accuracyMeters: CONFIG.location.accuracyMeters
+                },
+                medium: CONFIG.medium,
+                ip: null
+            };
         
         const response = await axios.post(
             url,
@@ -305,8 +315,8 @@ if (action === 'check-in' || action === 'check-out') {
                 // Random delay between 0-14 minutes (09:00 AM to 09:14 AM window)
                 await waitRandomTime(0, 14);
             } else if (action === 'check-out') {
-                // Random delay between 0-15 minutes (06:45 PM to 07:00 PM window)
-                await waitRandomTime(0, 15);
+                // Random delay between 0-5 minutes
+                await waitRandomTime(0, 5);
             }
 
             await markAttendance(action);
