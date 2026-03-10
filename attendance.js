@@ -312,8 +312,8 @@ if (action === 'check-in' || action === 'check-out') {
     (async () => {
         try {
             if (action === 'check-in') {
-                // Random delay between 0-14 minutes (09:00 AM to 09:14 AM window)
-                await waitRandomTime(0, 14);
+                // Random delay between 0-5 minutes
+                await waitRandomTime(0, 5);
             } else if (action === 'check-out') {
                 // Random delay between 0-5 minutes
                 await waitRandomTime(0, 5);
