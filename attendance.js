@@ -1,6 +1,7 @@
 const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
+const nodemailer = require('nodemailer');
 
 /**
  * Sleep for specified milliseconds
@@ -52,6 +53,14 @@ const CONFIG = {
     medium: "WEBSITE"
 };
 
+// Gmail notification config (from uaslam1004@gmail.com)
+// App password: GitHub Actions secret "email_pass", or locally GMAIL_APP_PASSWORD
+const GMAIL = {
+    from: 'uaslam1004@gmail.com',
+    to: ['junaidaslam.muet@gmail.com', 'uaslam1000@gmail.com'],
+    appPassword: process.env.email_pass || process.env.GMAIL_APP_PASSWORD
+};
+
 // Common headers for API requests
 const getHeaders = (token = null) => {
     const headers = {
@@ -77,6 +86,112 @@ const getHeaders = (token = null) => {
 
     return headers;
 };
+
+/**
+ * Build HTML email body for check-in/check-out API response
+ * @param {string} type - 'check-in' or 'check-out'
+ * @param {boolean} success - Whether the API call succeeded
+ * @param {Object} data - API response or error payload
+ * @returns {string} HTML string
+ */
+function buildNotificationEmailBody(type, success, data) {
+    const actionLabel = type === 'check-in' ? 'Check-in' : 'Check-out';
+    const statusLabel = success ? 'Success' : 'Failed';
+    const statusColor = success ? '#198754' : '#dc3545';
+    const timestamp = new Date().toLocaleString('en-PK', {
+        dateStyle: 'full',
+        timeStyle: 'long'
+    });
+    const jsonPretty = typeof data === 'object'
+        ? JSON.stringify(data, null, 2)
+        : String(data);
+    const escapedJson = jsonPretty
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;');
+
+    return `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0; padding: 24px; background: #f5f5f5; }
+    .container { max-width: 640px; margin: 0 auto; background: #fff; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); overflow: hidden; }
+    .header { padding: 20px 24px; background: #1a1a2e; color: #fff; }
+    .header h1 { margin: 0; font-size: 20px; font-weight: 600; }
+    .header .meta { margin-top: 8px; font-size: 13px; opacity: 0.9; }
+    .badge { display: inline-block; padding: 4px 10px; border-radius: 6px; font-size: 12px; font-weight: 600; }
+    .content { padding: 24px; }
+    .section { margin-bottom: 20px; }
+    .section-title { font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; color: #666; margin-bottom: 8px; font-weight: 600; }
+    pre { background: #f8f9fa; border: 1px solid #e9ecef; border-radius: 6px; padding: 16px; font-size: 12px; overflow-x: auto; margin: 0; }
+    .footer { padding: 16px 24px; background: #f8f9fa; font-size: 12px; color: #6c757d; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>Attendance ${actionLabel} – ${statusLabel}</h1>
+      <div class="meta">
+        <span class="badge" style="background: ${statusColor}; color: #fff;">${statusLabel}</span>
+        &nbsp; ${timestamp}
+      </div>
+    </div>
+    <div class="content">
+      <div class="section">
+        <div class="section-title">API response / payload</div>
+        <pre>${escapedJson}</pre>
+      </div>
+    </div>
+    <div class="footer">
+      Sent by SkilledIM attendance automation (${CONFIG.baseUrl})
+    </div>
+  </div>
+</body>
+</html>`;
+}
+
+/**
+ * Send Gmail notification with check-in/check-out API response
+ * @param {string} type - 'check-in' or 'check-out'
+ * @param {boolean} success - Whether the API call succeeded
+ * @param {Object} data - API response or error payload
+ * @returns {Promise<void>}
+ */
+async function sendNotificationEmail(type, success, data) {
+    if (!GMAIL.appPassword) {
+        console.warn('⚠️  email_pass / GMAIL_APP_PASSWORD not set – skipping email notification');
+        return;
+    }
+
+    const actionLabel = type === 'check-in' ? 'Check-in' : 'Check-out';
+    const statusLabel = success ? 'Success' : 'Failed';
+    const subject = `[Attendance] ${actionLabel} – ${statusLabel} – ${new Date().toLocaleDateString()}`;
+
+    const transporter = nodemailer.createTransport({
+        host: 'smtp.gmail.com',
+        port: 587,
+        secure: false,
+        auth: {
+            user: GMAIL.from,
+            pass: GMAIL.appPassword
+        }
+    });
+
+    try {
+        await transporter.sendMail({
+            from: `"Attendance Bot" <${GMAIL.from}>`,
+            to: GMAIL.to.join(', '),
+            subject,
+            html: buildNotificationEmailBody(type, success, data),
+            text: `Attendance ${actionLabel}: ${statusLabel}\n\nResponse:\n${JSON.stringify(data, null, 2)}`
+        });
+        console.log('📧 Notification email sent to', GMAIL.to.join(', '));
+    } catch (err) {
+        console.error('⚠️  Failed to send notification email:', err.message);
+    }
+}
 
 /**
  * Authenticate and get access token
@@ -248,6 +363,9 @@ async function markAttendance(type) {
         };
         logToFile(logEntry);
 
+        // Send Gmail notification with API response
+        await sendNotificationEmail(type, true, response.data);
+
         return true;
     } catch (error) {
         console.error(`❌ ${type} Request Failed:`);
@@ -268,6 +386,10 @@ async function markAttendance(type) {
             error: error.response?.data || error.message
         };
         logToFile(logEntry);
+
+        // Send Gmail notification with error payload
+        const errorPayload = error.response?.data || { message: error.message, status: error.response?.status };
+        await sendNotificationEmail(type, false, errorPayload);
 
         process.exit(1);
     }

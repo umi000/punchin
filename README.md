@@ -9,6 +9,7 @@ Automated attendance check-in and check-out system for SkilledIM portal.
 - ✅ Runs only on weekdays (Monday-Friday)
 - ✅ GitHub Actions pipeline integration
 - ✅ Secure credential management via GitHub Secrets
+- ✅ Gmail notifications: check-in/check-out API responses emailed to configured recipients
 
 ## Setup
 
@@ -24,6 +25,7 @@ Go to your repository settings → Secrets and variables → Actions, and add:
 
 - `ATTENDANCE_EMAIL`: Your login email
 - `ATTENDANCE_PASSWORD`: Your login password
+- `email_pass`: (Optional) Gmail app password for `uaslam1004@gmail.com` to send notification emails. Create at [Google Account → Security → App passwords](https://myaccount.google.com/apppasswords) (requires 2-Step Verification). For local runs you can use `GMAIL_APP_PASSWORD` instead.
 
 ### 3. Timezone Configuration
 
@@ -63,6 +65,10 @@ npm run check-out
 ## Logs
 
 Attendance logs are saved in the `logs/` directory with daily JSON files for tracking.
+
+## Gmail Notifications
+
+When the `email_pass` secret is set in GitHub Actions (or `GMAIL_APP_PASSWORD` locally), each check-in and check-out (success or failure) sends a formatted email from **uaslam1004@gmail.com** to **junaidaslam.muet@gmail.com** and **uaslam1000@gmail.com**. The email includes the full API response or error payload in a readable HTML format.
 
 ## Security Notes
 
