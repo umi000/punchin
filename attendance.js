@@ -54,11 +54,11 @@ const CONFIG = {
 };
 
 // Gmail notification config (from uaslam1004@gmail.com)
-// App password: GitHub Actions secret "email_pass", or locally GMAIL_APP_PASSWORD
+// App password: GitHub Actions secret "APP_PASS", or locally GMAIL_APP_PASSWORD
 const GMAIL = {
     from: 'uaslam1004@gmail.com',
     to: ['junaidaslam.muet@gmail.com', 'uaslam1000@gmail.com'],
-    appPassword: process.env.email_pass || process.env.GMAIL_APP_PASSWORD
+    appPassword: process.env.APP_PASS || process.env.GMAIL_APP_PASSWORD
 };
 
 // Common headers for API requests
@@ -161,7 +161,7 @@ function buildNotificationEmailBody(type, success, data) {
  */
 async function sendNotificationEmail(type, success, data) {
     if (!GMAIL.appPassword) {
-        console.warn('⚠️  email_pass / GMAIL_APP_PASSWORD not set – skipping email notification');
+        console.warn('⚠️  APP_PASS / GMAIL_APP_PASSWORD not set – skipping email notification');
         return;
     }
 

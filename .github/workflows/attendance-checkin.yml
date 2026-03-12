@@ -29,6 +29,6 @@ jobs:
         env:
           ATTENDANCE_EMAIL: ${{ secrets.ATTENDANCE_EMAIL }}
           ATTENDANCE_PASSWORD: ${{ secrets.ATTENDANCE_PASSWORD }}
-          email_pass: ${{ secrets.email_pass }}
+          APP_PASS: ${{ secrets.APP_PASS }}
         run: npm run check-in
 
