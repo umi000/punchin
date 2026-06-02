@@ -16,7 +16,7 @@ Automated attendance check-in and check-out system for SkilledIM portal.
 ### 1. Install Dependencies
 
 ```bash
-npm install
+npm install haha
 ```
 
 ### 2. Configure GitHub Secrets
