@@ -1,4 +1,3 @@
-const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
 const nodemailer = require('nodemailer');
@@ -86,47 +85,6 @@ const GMAIL = {
     appPassword: process.env.APP_PASS || process.env.GMAIL_APP_PASSWORD
 };
 
-// Common headers matching updated cURL request
-const getHeaders = (token = null, cookieHeader = null) => {
-    const headers = {
-        'Accept': 'application/json',
-        'Accept-Language': 'en-PK,en-US;q=0.9,en;q=0.8,ur;q=0.7',
-        'Connection': 'keep-alive',
-        'Content-Type': 'application/json',
-        'DNT': '1',
-        'Origin': 'https://portal.skilledim.com',
-        'Priority': 'u=1, i',
-        'Referer': 'https://portal.skilledim.com/',
-        'Sec-Fetch-Dest': 'empty',
-        'Sec-Fetch-Mode': 'cors',
-        'Sec-Fetch-Site': 'same-site',
-        // 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36',
-        'sec-ch-ua': '"Chromium";v="152", "Not?A_Brand";v="24", "Google Chrome";v="152"',
-        'sec-ch-ua-mobile': '?0',
-        'sec-ch-ua-platform': '"Windows"'
-    };
-
-    if (token) {
-        headers['Authorization'] = `Bearer ${token}`;
-    }
-
-    if (cookieHeader) {
-        headers['Cookie'] = cookieHeader;
-    }
-
-    return headers;
-};
-
-function isCloudflareChallengePayload(payload) {
-    if (!payload) return false;
-
-    const text = typeof payload === 'string'
-        ? payload
-        : JSON.stringify(payload);
-
-    return /Just a moment|cf_chl|challenge-platform|Enable JavaScript and cookies|Access denied/i.test(text);
-}
-
 function buildNotificationEmailBody(type, success, data) {
     const actionLabel = type === 'check-in' ? 'Check-in' : 'Check-out';
     const statusLabel = success ? 'Success' : 'Failed';
@@ -174,12 +132,12 @@ function buildNotificationEmailBody(type, success, data) {
     </div>
     <div class="content">
       <div class="section">
-        <div class="section-title">API response / payload</div>
+        <div class="section-title">Portal action result</div>
         <pre>${escapedJson}</pre>
       </div>
     </div>
     <div class="footer">
-      Sent by SkilledIM attendance automation (${CONFIG.baseUrl})
+      Sent by SkilledIM attendance automation
     </div>
   </div>
 </body>
@@ -250,7 +208,8 @@ async function loginWithPlaywright() {
     console.log(`🧭 Launching Playwright UI to sign in through the portal... (headless=${useHeadless})`);
     const browser = await chromium.launch({
         headless: useHeadless,
-        channel: 'chrome'
+        channel: 'chrome',
+        args: useHeadless ? ['--no-sandbox', '--disable-setuid-sandbox'] : []
     });
 
     const context = await browser.newContext({
@@ -375,211 +334,37 @@ async function performPortalAction(action) {
     return true;
 }
 
-async function getAuthToken() {
-    try {
-        console.log('🔐 Attempting to login...');
-        const response = await axios.post(
-            `${CONFIG.baseUrl}/api/auth/signin`,
-            {
-                email: CONFIG.email,
-                password: CONFIG.password
-            },
-            {
-                headers: getHeaders(),
-                timeout: 10000
-            }
-        );
-
-        const token = response.data?.token || 
-                     response.data?.accessToken || 
-                     response.data?.data?.token ||
-                     response.data?.data?.accessToken;
-
-        if (token) {
-            console.log('✅ Login successful!');
-            return { token, cookieHeader: null };
-        } else {
-            console.error('❌ Login response did not contain a token');
-            console.error('Response structure:', JSON.stringify(response.data, null, 2));
-            return null;
-        }
-    } catch (error) {
-        console.error('❌ Login Failed:');
-        if (error.response) {
-            console.error('   Status:', error.response.status);
-
-            if (isCloudflareChallengePayload(error.response.data)) {
-                console.error('   Cloudflare challenge detected: the endpoint is blocking automated requests before authentication.');
-                console.error('   Falling back to Playwright UI sign-in...');
-            } else {
-                console.error('   Data:', JSON.stringify(error.response.data, null, 2));
-            }
-        } else if (error.request) {
-            console.error('   No response received:', error.message);
-        } else {
-            console.error('   Error:', error.message);
-        }
-
-        return loginWithPlaywright();
-    }
-}
-
-async function getCurrentAttendanceId(auth) {
-    const token = auth?.token || null;
-    const cookieHeader = auth?.cookieHeader || null;
-
-    try {
-        console.log('📋 Fetching attendance status...');
-        const response = await axios.get(
-            `${CONFIG.baseUrl}/api/organizations/${CONFIG.organizationId}/employee-self/${CONFIG.employeeId}/attendance/status`,
-            {
-                headers: getHeaders(token, cookieHeader),
-                timeout: 10000
-            }
-        );
-
-        const attendanceId = response.data?.data?.id || 
-                             response.data?.id || 
-                             response.data?.attendanceId ||
-                             response.data?.data?.attendanceId;
-
-        if (attendanceId) {
-            console.log(`✅ Found attendance ID: ${attendanceId}`);
-            return attendanceId;
-        }
-
-        console.log('⚠️  No attendance ID found in status response');
-        console.log('   Response:', JSON.stringify(response.data, null, 2));
-        return null;
-    } catch (error) {
-        console.error('⚠️  Could not fetch attendance status:');
-        if (error.response) {
-            console.error('   Status:', error.response.status);
-            console.error('   Data:', JSON.stringify(error.response.data, null, 2));
-        } else {
-            console.error('   Error:', error.message);
-        }
-        return null;
-    }
-}
-
 async function markAttendance(type) {
     console.log(`\n${'='.repeat(60)}`);
     console.log(`🕐 ${new Date().toLocaleString('en-PK', { timeZone: 'Asia/Karachi' })}`);
     console.log(`📝 Starting ${type.toUpperCase()} process...`);
     console.log('='.repeat(60));
 
-    if (type === 'check-out') {
-        try {
-            await performPortalAction(type);
-            console.log('✅ Checkout action completed in the portal UI.');
-            return true;
-        } catch (error) {
-            console.error('❌ Portal checkout failed:', error.message);
-            process.exit(1);
-        }
-    }
-
-    const auth = await getAuthToken();
-    if (!auth || (!auth.token && !auth.cookieHeader)) {
-        console.error('❌ Cannot proceed without authentication token or browser session');
-        process.exit(1);
-    }
-
-    const token = auth.token || null;
-    const cookieHeader = auth.cookieHeader || null;
-
-    let url;
-    let attendanceId = null;
-
-    if (type === 'check-in') {
-        url = `${CONFIG.baseUrl}/api/organizations/${CONFIG.organizationId}/attendance/employee/${CONFIG.employeeId}/check-in`;
-    } else if (type === 'check-out') {
-        attendanceId = await getCurrentAttendanceId(auth);
-        
-        if (!attendanceId) {
-            console.error('❌ Cannot check-out: No active attendance record found');
-            console.error('   Make sure you have checked in first!');
-            process.exit(1);
-        }
-
-        url = `${CONFIG.baseUrl}/api/organizations/${CONFIG.organizationId}/attendance/employee/${CONFIG.employeeId}/attendance/${attendanceId}/check-out`;
-    } else {
-        console.error(`❌ Invalid attendance type: ${type}`);
-        console.error('   Use "check-in" or "check-out"');
-        process.exit(1);
-    }
-
     try {
-        console.log(`📤 Sending ${type} request...`);
-        
-        const requestBody = type === 'check-in' 
-            ? {
-                date: getPKTDateString(),
-                location: CONFIG.location,
-                medium: CONFIG.medium,
-                ip: null
-            }
-            : {
-                location: {
-                    latitude: CONFIG.location.latitude,
-                    longitude: CONFIG.location.longitude,
-                    accuracyMeters: CONFIG.location.accuracyMeters
-                },
-                medium: CONFIG.medium,
-                ip: null
-            };
-        
-        const response = await axios.post(
-            url,
-            requestBody,
-            {
-                headers: getHeaders(token, cookieHeader),
-                timeout: 10000
-            }
-        );
+        await performPortalAction(type);
+        console.log(`✅ ${type === 'check-in' ? 'Check-in' : 'Check-out'} action completed in the portal UI.`);
 
-        console.log(`✅ Successfully ${type === 'check-in' ? 'Checked In' : 'Checked Out'}!`);
-        console.log('📄 Response:', JSON.stringify(response.data, null, 2));
-        
         const logEntry = {
             timestamp: new Date().toISOString(),
-            type: type,
+            type,
             status: 'success',
-            response: response.data
+            response: { source: 'portal_ui_action', action: type }
         };
         logToFile(logEntry);
-
-        await sendNotificationEmail(type, true, response.data);
 
         return true;
     } catch (error) {
-        console.error(`❌ ${type} Request Failed:`);
-        if (error.response) {
-            console.error('   Status:', error.response.status);
-            if (isCloudflareChallengePayload(error.response.data)) {
-                console.error('   Cloudflare challenge detected: the API is blocking automated requests before the action can complete.');
-                console.error('   This is an anti-bot page, not a normal API failure.');
-            } else {
-                console.error('   Data:', JSON.stringify(error.response.data, null, 2));
-            }
-        } else if (error.request) {
-            console.error('   No response received:', error.message);
-        } else {
-            console.error('   Error:', error.message);
-        }
+        console.error(`❌ Portal ${type} action failed:`, error.message);
 
         const logEntry = {
             timestamp: new Date().toISOString(),
-            type: type,
+            type,
             status: 'error',
-            error: error.response?.data || error.message
+            error: error.message
         };
         logToFile(logEntry);
 
-        const errorPayload = error.response?.data || { message: error.message, status: error.response?.status };
-        await sendNotificationEmail(type, false, errorPayload);
-
+        await sendNotificationEmail(type, false, { message: error.message, source: 'portal_ui_action' });
         process.exit(1);
     }
 }
