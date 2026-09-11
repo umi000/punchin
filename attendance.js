@@ -244,9 +244,12 @@ function extractTokenFromStorageSnapshot(snapshot) {
 }
 
 async function loginWithPlaywright() {
-    console.log('🧭 Launching Playwright UI to sign in through the portal...');
+    const isGitHubActions = process.env.GITHUB_ACTIONS === 'true' || process.env.CI === 'true';
+    const useHeadless = isGitHubActions || process.env.PLAYWRIGHT_HEADLESS === 'true';
+
+    console.log(`🧭 Launching Playwright UI to sign in through the portal... (headless=${useHeadless})`);
     const browser = await chromium.launch({
-        headless: false,
+        headless: useHeadless,
         channel: 'chrome'
     });
 
