@@ -7,13 +7,16 @@
     "check-in": "node attendance.js check-in",
     "check-out": "node attendance.js check-out"
   },
-  "keywords": ["attendance", "automation"],
+  "keywords": [
+    "attendance",
+    "automation"
+  ],
   "author": "",
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
     "axios": "^1.6.0",
-    "nodemailer": "^6.9.0"
+    "nodemailer": "^6.9.0",
+    "playwright": "^1.63.0"
   }
 }
-

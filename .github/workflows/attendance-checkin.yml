@@ -2,9 +2,9 @@ name: Attendance Check-In
 
 on:
   schedule:
-    # 08:45 AM PKT (UTC+5) = 03:45 AM UTC
+    # 07:30 AM PKT (UTC+5) = 02:30 AM UTC
     # Format: minute hour day month weekday (1-5 is Mon-Fri)
-    - cron: '05 2 * * 1-5'
+    - cron: '30 2 * * 1-5'
   workflow_dispatch:  # Allows you to click "Run workflow" manually
 
 jobs:

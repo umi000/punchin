@@ -2,6 +2,7 @@ const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
 const nodemailer = require('nodemailer');
+const { chromium } = require('playwright');
 
 function sleep(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
@@ -86,7 +87,7 @@ const GMAIL = {
 };
 
 // Common headers matching updated cURL request
-const getHeaders = (token = null) => {
+const getHeaders = (token = null, cookieHeader = null) => {
     const headers = {
         'Accept': 'application/json',
         'Accept-Language': 'en-PK,en-US;q=0.9,en;q=0.8,ur;q=0.7',
@@ -107,6 +108,10 @@ const getHeaders = (token = null) => {
 
     if (token) {
         headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    if (cookieHeader) {
+        headers['Cookie'] = cookieHeader;
     }
 
     return headers;
@@ -215,6 +220,158 @@ async function sendNotificationEmail(type, success, data) {
     }
 }
 
+function extractTokenFromStorageSnapshot(snapshot) {
+    const flattened = [];
+
+    for (const value of Object.values(snapshot || {})) {
+        if (typeof value === 'string') {
+            flattened.push(value);
+        }
+    }
+
+    const allText = flattened.join(' ');
+    const jwtMatch = allText.match(/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g);
+    if (jwtMatch && jwtMatch[0]) {
+        return jwtMatch[0];
+    }
+
+    const tokenMatch = allText.match(/(?:token|accessToken|authToken|jwt)["':= ]+([A-Za-z0-9._-]+)/i);
+    if (tokenMatch && tokenMatch[1]) {
+        return tokenMatch[1];
+    }
+
+    return null;
+}
+
+async function loginWithPlaywright() {
+    console.log('🧭 Launching Playwright UI to sign in through the portal...');
+    const browser = await chromium.launch({
+        headless: false,
+        channel: 'chrome'
+    });
+
+    const context = await browser.newContext({
+        viewport: { width: 1440, height: 900 },
+        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36'
+    });
+    const page = await context.newPage();
+
+    try {
+        await page.goto('https://portal.skilledim.com/', { waitUntil: 'domcontentloaded', timeout: 60000 });
+        await page.waitForTimeout(2000);
+
+        const emailField = page.locator('input[name="email"], input[type="email"], input[autocomplete="username"], input[id*="email"]').first();
+        const passwordField = page.locator('input[name="password"], input[type="password"]').first();
+        const submitButton = page.locator('button[type="submit"], button:has-text("Sign In")').first();
+
+        if (await emailField.count()) {
+            await emailField.fill(CONFIG.email);
+        }
+
+        if (await passwordField.count()) {
+            await passwordField.fill(CONFIG.password);
+        }
+
+        console.log('📱 Attempting Sign In through the portal UI...');
+
+        try {
+            await submitButton.click({ timeout: 20000, force: true });
+        } catch (clickError) {
+            console.log('⚠️ Regular click blocked; falling back to force submit.');
+            await submitButton.dispatchEvent('click');
+        }
+
+        await page.waitForTimeout(5000);
+        await page.waitForURL(/\/self-service|\/dashboard|\/home/i, { timeout: 120000 }).catch(() => {});
+
+        const snapshot = await page.evaluate(() => {
+            const values = [];
+            for (let i = 0; i < localStorage.length; i++) {
+                const key = localStorage.key(i);
+                const val = key ? localStorage.getItem(key) : null;
+                if (val) values.push(val);
+            }
+            for (let i = 0; i < sessionStorage.length; i++) {
+                const key = sessionStorage.key(i);
+                const val = key ? sessionStorage.getItem(key) : null;
+                if (val) values.push(val);
+            }
+            return {
+                storage: values.join(' '),
+                cookies: document.cookie || ''
+            };
+        });
+
+        const token = extractTokenFromStorageSnapshot(snapshot);
+        const cookies = await context.cookies();
+        const cookieHeader = cookies
+            .filter((cookie) => cookie.name && cookie.value)
+            .map((cookie) => `${cookie.name}=${cookie.value}`)
+            .join('; ');
+
+        if (token || cookieHeader) {
+            console.log('✅ Playwright login succeeded and session data was captured.');
+            return { page, context, browser, token, cookieHeader };
+        }
+
+        console.error('❌ Playwright opened, but no auth token or session cookie was detected after sign-in.');
+        await browser.close();
+        return null;
+    } catch (error) {
+        console.error('❌ Playwright login failed:', error.message);
+        await browser.close();
+        return null;
+    }
+}
+
+async function performPortalAction(action) {
+    const auth = await loginWithPlaywright();
+    if (!auth || !auth.page) {
+        throw new Error('Portal login failed before action could be performed.');
+    }
+
+    const { page, browser } = auth;
+    const selectors = [
+        `button:has-text("${action === 'check-in' ? 'Check In' : 'Check Out'}")`,
+        `button:has-text("${action === 'check-in' ? 'Check-In' : 'Check-Out'}")`,
+        `button:has-text("${action === 'check-in' ? 'Check in' : 'Check out'}")`,
+        `button:has-text("${action === 'check-in' ? 'Sign In' : 'Sign Out'}")`,
+        `button:has-text("${action === 'check-in' ? 'Logout' : 'Logout'}")`,
+        'button[type="button"]',
+        'button'
+    ];
+
+    let clicked = false;
+
+    for (const selector of selectors) {
+        const locator = page.locator(selector).first();
+        const count = await locator.count();
+        if (!count) continue;
+
+        try {
+            const isVisible = await locator.isVisible();
+            if (!isVisible) continue;
+
+            console.log(`🎯 Clicking portal action using selector: ${selector}`);
+            await locator.click({ force: true, timeout: 15000 });
+            clicked = true;
+            break;
+        } catch (error) {
+            console.log(`⚠️ Selector ${selector} did not work: ${error.message}`);
+        }
+    }
+
+    await page.waitForTimeout(5000);
+    await browser.close();
+
+    if (!clicked) {
+        throw new Error(`Could not find or click the ${action} button in the portal UI.`);
+    }
+
+    console.log(`✅ Portal ${action} action was triggered successfully.`);
+    return true;
+}
+
 async function getAuthToken() {
     try {
         console.log('🔐 Attempting to login...');
@@ -237,7 +394,7 @@ async function getAuthToken() {
 
         if (token) {
             console.log('✅ Login successful!');
-            return token;
+            return { token, cookieHeader: null };
         } else {
             console.error('❌ Login response did not contain a token');
             console.error('Response structure:', JSON.stringify(response.data, null, 2));
@@ -250,8 +407,7 @@ async function getAuthToken() {
 
             if (isCloudflareChallengePayload(error.response.data)) {
                 console.error('   Cloudflare challenge detected: the endpoint is blocking automated requests before authentication.');
-                console.error('   This is not a bad email/password issue; the API is returning the browser challenge page.');
-                console.error('   Use a real browser session or the portal auth flow instead of direct curl/axios calls from GitHub Actions.');
+                console.error('   Falling back to Playwright UI sign-in...');
             } else {
                 console.error('   Data:', JSON.stringify(error.response.data, null, 2));
             }
@@ -260,17 +416,21 @@ async function getAuthToken() {
         } else {
             console.error('   Error:', error.message);
         }
-        return null;
+
+        return loginWithPlaywright();
     }
 }
 
-async function getCurrentAttendanceId(token) {
+async function getCurrentAttendanceId(auth) {
+    const token = auth?.token || null;
+    const cookieHeader = auth?.cookieHeader || null;
+
     try {
         console.log('📋 Fetching attendance status...');
         const response = await axios.get(
             `${CONFIG.baseUrl}/api/organizations/${CONFIG.organizationId}/employee-self/${CONFIG.employeeId}/attendance/status`,
             {
-                headers: getHeaders(token),
+                headers: getHeaders(token, cookieHeader),
                 timeout: 10000
             }
         );
@@ -306,11 +466,25 @@ async function markAttendance(type) {
     console.log(`📝 Starting ${type.toUpperCase()} process...`);
     console.log('='.repeat(60));
 
-    const token = await getAuthToken();
-    if (!token) {
-        console.error('❌ Cannot proceed without authentication token');
+    if (type === 'check-out') {
+        try {
+            await performPortalAction(type);
+            console.log('✅ Checkout action completed in the portal UI.');
+            return true;
+        } catch (error) {
+            console.error('❌ Portal checkout failed:', error.message);
+            process.exit(1);
+        }
+    }
+
+    const auth = await getAuthToken();
+    if (!auth || (!auth.token && !auth.cookieHeader)) {
+        console.error('❌ Cannot proceed without authentication token or browser session');
         process.exit(1);
     }
+
+    const token = auth.token || null;
+    const cookieHeader = auth.cookieHeader || null;
 
     let url;
     let attendanceId = null;
@@ -318,7 +492,7 @@ async function markAttendance(type) {
     if (type === 'check-in') {
         url = `${CONFIG.baseUrl}/api/organizations/${CONFIG.organizationId}/attendance/employee/${CONFIG.employeeId}/check-in`;
     } else if (type === 'check-out') {
-        attendanceId = await getCurrentAttendanceId(token);
+        attendanceId = await getCurrentAttendanceId(auth);
         
         if (!attendanceId) {
             console.error('❌ Cannot check-out: No active attendance record found');
@@ -357,7 +531,7 @@ async function markAttendance(type) {
             url,
             requestBody,
             {
-                headers: getHeaders(token),
+                headers: getHeaders(token, cookieHeader),
                 timeout: 10000
             }
         );
