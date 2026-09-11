@@ -206,25 +206,75 @@ async function loginWithPlaywright() {
     const useHeadless = isGitHubActions || process.env.PLAYWRIGHT_HEADLESS === 'true';
 
     console.log(`🧭 Launching Playwright UI to sign in through the portal... (headless=${useHeadless})`);
+
     const browser = await chromium.launch({
         headless: useHeadless,
         channel: 'chrome',
-        args: useHeadless ? ['--no-sandbox', '--disable-setuid-sandbox'] : []
+        args: [
+            '--disable-blink-features=AutomationControlled',
+            '--disable-features=AutomationControlled',
+            ...(useHeadless ? ['--no-sandbox', '--disable-setuid-sandbox'] : [])
+        ]
     });
 
     const context = await browser.newContext({
         viewport: { width: 1440, height: 900 },
-        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36'
+        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+        locale: 'en-US',
+        timezoneId: 'Asia/Karachi'
     });
+
+    await context.addInitScript(() => {
+        Object.defineProperty(window.navigator, 'webdriver', {
+            get: () => false,
+            configurable: true
+        });
+    });
+
     const page = await context.newPage();
 
+    page.on('console', msg => console.log(`[BROWSER CONSOLE] ${msg.type()}: ${msg.text()}`));
+    page.on('pageerror', error => console.log('[PAGE ERROR]', error.message));
+    page.on('request', req => {
+        const url = req.url();
+        if (url.includes('portal.skilledim.com') || url.includes('skilledim.com') || url.includes('api.')) {
+            console.log('[REQUEST]', req.method(), url);
+        }
+    });
+    page.on('response', async res => {
+        const url = res.url();
+        if (url.includes('portal.skilledim.com') || url.includes('skilledim.com') || url.includes('api.')) {
+            console.log('[RESPONSE]', res.status(), res.request().method(), url);
+            try {
+                const text = await res.text();
+                if (text && text.length < 1200) {
+                    console.log('   BODY PREVIEW:', text.replace(/\s+/g, ' ').slice(0, 300));
+                }
+            } catch (e) {
+                // ignore
+            }
+        }
+    });
+    page.on('requestfailed', req => console.log('[REQUEST FAILED]', req.method(), req.url(), req.failure()?.errorText || 'unknown'));
+
     try {
+        await context.grantPermissions(['geolocation'], { origin: 'https://portal.skilledim.com' }).catch(() => {});
+        await context.setGeolocation({
+            latitude: CONFIG.location.latitude,
+            longitude: CONFIG.location.longitude,
+            accuracy: CONFIG.location.accuracyMeters
+        }).catch(() => {});
+
         await page.goto('https://portal.skilledim.com/', { waitUntil: 'domcontentloaded', timeout: 60000 });
         await page.waitForTimeout(2000);
 
-        const emailField = page.locator('input[name="email"], input[type="email"], input[autocomplete="username"], input[id*="email"]').first();
-        const passwordField = page.locator('input[name="password"], input[type="password"]').first();
-        const submitButton = page.locator('button[type="submit"], button:has-text("Sign In")').first();
+        const emailField = page.locator('input[name="email"], input[type="email"], input[autocomplete="username"], input[id="email"]').first();
+        const passwordField = page.locator('input[name="password"], input[type="password"], input[id="password"]').first();
+        const submitButtonSelector = 'button[type="submit"]:has-text("Sign In")';
+        const submitButton = page.getByRole('button', { name: /^Sign In$/i })
+            .or(page.locator(submitButtonSelector))
+            .first();
+        const loginForm = page.locator('form').filter({ has: emailField }).first();
 
         if (await emailField.count()) {
             await emailField.fill(CONFIG.email);
@@ -235,15 +285,42 @@ async function loginWithPlaywright() {
         }
 
         console.log('📱 Attempting Sign In through the portal UI...');
+        console.log(`🔎 Sign-in candidate selector: ${submitButtonSelector}`);
+        console.log(`🧭 Sign-in button matches found: ${await submitButton.count()}`);
+        console.log(`🧭 Login form matches found: ${await loginForm.count()}`);
 
         try {
-            await submitButton.click({ timeout: 20000, force: true });
+            if (await loginForm.count()) {
+                console.log('🧿 Triggering actual form submit via requestSubmit().');
+                await loginForm.evaluate((form) => form.requestSubmit());
+            }
+
+            if (await submitButton.count()) {
+                console.log('🖱️ Fallback: clicking the submit button directly.');
+                await submitButton.click({ timeout: 20000, force: true });
+            }
         } catch (clickError) {
-            console.log('⚠️ Regular click blocked; falling back to force submit.');
+            console.log('⚠️ Form submission failed; retrying with force click.');
+            if (await submitButton.count()) {
+                await submitButton.click({ timeout: 20000, force: true });
+            }
+            console.log('🖱️ Force-clicked the Sign In button.');
             await submitButton.dispatchEvent('click');
+            console.log('🖱️ Dispatched click event on the Sign In button.');
         }
 
-        await page.waitForTimeout(5000);
+        await page.waitForTimeout(8000);
+        console.log('[FINAL URL AFTER SIGN-IN CLICK]', page.url());
+
+        const authState = await page.evaluate(() => ({
+            url: window.location.href,
+            hasLocalStorage: !!window.localStorage,
+            localKeys: Object.keys(window.localStorage || {}),
+            sessionKeys: Object.keys(window.sessionStorage || {}),
+            cookies: document.cookie || ''
+        }));
+        console.log('[AUTH STATE]', JSON.stringify(authState, null, 2));
+
         await page.waitForURL(/\/self-service|\/dashboard|\/home/i, { timeout: 120000 }).catch(() => {});
 
         const snapshot = await page.evaluate(() => {
@@ -271,6 +348,9 @@ async function loginWithPlaywright() {
             .map((cookie) => `${cookie.name}=${cookie.value}`)
             .join('; ');
 
+        console.log('[AUTH TOKEN FOUND]', !!token);
+        console.log('[AUTH COOKIE HEADER FOUND]', !!cookieHeader);
+
         if (token || cookieHeader) {
             console.log('✅ Playwright login succeeded and session data was captured.');
             return { page, context, browser, token, cookieHeader };
@@ -293,29 +373,49 @@ async function performPortalAction(action) {
     }
 
     const { page, browser } = auth;
+    const actionLabel = action === 'check-in' ? 'Check In' : 'Check Out';
+    const actionAliases = action === 'check-in'
+        ? ['Check In', 'Check-In', 'check in', 'Check in', 'Punch In', 'Punch-In', 'Clock In', 'Clock-In', 'Start Shift']
+        : ['Check Out', 'Check-Out', 'check out', 'Check out', 'Punch Out', 'Punch-Out', 'Clock Out', 'Clock-Out', 'End Shift'];
+    const nextStateLabel = action === 'check-in' ? 'Check Out' : 'Check In';
     const selectors = [
-        `button:has-text("${action === 'check-in' ? 'Check In' : 'Check Out'}")`,
-        `button:has-text("${action === 'check-in' ? 'Check-In' : 'Check-Out'}")`,
-        `button:has-text("${action === 'check-in' ? 'Check in' : 'Check out'}")`,
-        `button:has-text("${action === 'check-in' ? 'Sign In' : 'Sign Out'}")`,
-        `button:has-text("${action === 'check-in' ? 'Logout' : 'Logout'}")`,
+        ...actionAliases.map((alias) => `button:has-text("${alias}")`),
+        ...actionAliases.map((alias) => `button:has-text("${alias.toLowerCase()}")`),
+        action === 'check-in' ? 'button.btn-success' : 'button.btn-warning',
         'button[type="button"]',
         'button'
     ];
 
+    const visibleButtons = await page.locator('button, [role="button"]').evaluateAll((buttons) =>
+        buttons
+            .map((button) => (button.textContent || '').replace(/\s+/g, ' ').trim())
+            .filter(Boolean)
+    );
+    console.log('📋 Buttons currently visible on page:', visibleButtons);
+
     let clicked = false;
+    console.log(`🧭 Looking for ${action} button using ${selectors.length} selector candidates...`);
 
     for (const selector of selectors) {
         const locator = page.locator(selector).first();
         const count = await locator.count();
-        if (!count) continue;
+        if (!count) {
+            console.log(`🔎 No matches for selector: ${selector}`);
+            continue;
+        }
+
+        console.log(`🔎 Selector ${selector} matched ${count} button(s)`);
 
         try {
             const isVisible = await locator.isVisible();
-            if (!isVisible) continue;
+            if (!isVisible) {
+                console.log(`⚠️ Selector ${selector} matched but is not visible.`);
+                continue;
+            }
 
             console.log(`🎯 Clicking portal action using selector: ${selector}`);
             await locator.click({ force: true, timeout: 15000 });
+            console.log(`✅ Successfully clicked via selector: ${selector}`);
             clicked = true;
             break;
         } catch (error) {
@@ -323,14 +423,36 @@ async function performPortalAction(action) {
         }
     }
 
-    await page.waitForTimeout(5000);
-    await browser.close();
-
     if (!clicked) {
+        await browser.close();
         throw new Error(`Could not find or click the ${action} button in the portal UI.`);
     }
 
-    console.log(`✅ Portal ${action} action was triggered successfully.`);
+    const waitForStateText = async () => {
+        try {
+            await page.waitForFunction((expectedText) => {
+                const buttonText = Array.from(document.querySelectorAll('button'))
+                    .map((btn) => (btn.textContent || '').replace(/\s+/g, ' ').trim())
+                    .filter(Boolean);
+                return buttonText.some((text) => text.toLowerCase().includes(expectedText.toLowerCase()));
+            }, nextStateLabel, { timeout: 120000 });
+            console.log(`✅ Button text changed to '${nextStateLabel}' as expected.`);
+            return true;
+        } catch (error) {
+            console.log(`⚠️ Timed out waiting for button text to change to '${nextStateLabel}'.`);
+            return false;
+        }
+    };
+
+    const result = await waitForStateText();
+    await page.waitForTimeout(2000);
+    await browser.close();
+
+    if (!result) {
+        throw new Error(`Attendance ${action} was clicked, but the button never changed to '${nextStateLabel}'.`);
+    }
+
+    console.log(`✅ Portal ${action} action was triggered successfully and the UI changed to ${nextStateLabel}.`);
     return true;
 }
 
@@ -408,12 +530,8 @@ if (action === 'check-in' || action === 'check-out') {
 
     (async () => {
         try {
-            if (action === 'check-in' || action === 'check-out') {
-                await waitRandomTime(0, 5);
-            }
-
             if (isScheduled && !isWithinScheduledWindow(action)) {
-                console.log('ℹ️  Random wait pushed this run outside the PKT window. Skipping.');
+                console.log('ℹ️  Current time is outside the PKT window. Skipping.');
                 process.exit(0);
             }
 
