@@ -3,13 +3,20 @@ const fs = require('fs');
 const path = require('path');
 const nodemailer = require('nodemailer');
 
-/**
- * Sleep for specified milliseconds
- * @param {number} ms - Milliseconds to sleep
- * @returns {Promise<void>}
- */
 function sleep(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+/**
+ * Get YYYY-MM-DD formatted specifically for PKT
+ */
+function getPKTDateString() {
+    return new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'Asia/Karachi',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit'
+    }).format(new Date());
 }
 
 /**
@@ -31,19 +38,11 @@ function getPKTParts() {
     };
 }
 
-/**
- * Check if today is a weekday in PKT (Monday-Friday)
- * @returns {boolean}
- */
 function isWeekday() {
     const { weekday } = getPKTParts();
     return !['Sat', 'Sun'].includes(weekday);
 }
 
-/**
- * Scheduled GitHub runs may fire many hours late. Only punch during the
- * intended PKT window. Manual workflow_dispatch is not gated.
- */
 function isWithinScheduledWindow(action) {
     const { hour, minute } = getPKTParts();
     const now = hour * 60 + minute;
@@ -53,11 +52,6 @@ function isWithinScheduledWindow(action) {
     return now >= (18 * 60) && now < (20 * 60 + 30);
 }
 
-/**
- * Wait for a random time within the specified window
- * @param {number} minMinutes - Minimum minutes to wait
- * @param {number} maxMinutes - Maximum minutes to wait
- */
 async function waitRandomTime(minMinutes, maxMinutes) {
     const minMs = minMinutes * 60 * 1000;
     const maxMs = maxMinutes * 60 * 1000;
@@ -71,8 +65,8 @@ async function waitRandomTime(minMinutes, maxMinutes) {
 
 // Configuration
 const CONFIG = {
-    email: process.env.ATTENDANCE_EMAIL,
-    password: process.env.ATTENDANCE_PASSWORD,
+    email: process.env.ATTENDANCE_EMAIL || 'uaslam@innovatixinc.com',
+    password: process.env.ATTENDANCE_PASSWORD || 'Hasnain@123',
     organizationId: 2,
     employeeId: 441,
     baseUrl: "https://api.skilledim.com",
@@ -85,15 +79,13 @@ const CONFIG = {
     medium: "WEBSITE"
 };
 
-// Gmail notification config (from uaslam1004@gmail.com)
-// App password: GitHub Actions secret "APP_PASS", or locally GMAIL_APP_PASSWORD
 const GMAIL = {
     from: 'uaslam1004@gmail.com',
     to: ['junaidaslam.muet@gmail.com', 'uaslam1000@gmail.com'],
     appPassword: process.env.APP_PASS || process.env.GMAIL_APP_PASSWORD
 };
 
-// Common headers for API requests
+// Common headers matching updated cURL request
 const getHeaders = (token = null) => {
     const headers = {
         'Accept': 'application/json',
@@ -102,11 +94,12 @@ const getHeaders = (token = null) => {
         'Content-Type': 'application/json',
         'DNT': '1',
         'Origin': 'https://portal.skilledim.com',
+        'Priority': 'u=1, i',
         'Referer': 'https://portal.skilledim.com/',
         'Sec-Fetch-Dest': 'empty',
         'Sec-Fetch-Mode': 'cors',
         'Sec-Fetch-Site': 'same-site',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36',
+        // 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36',
         'sec-ch-ua': '"Chromium";v="152", "Not?A_Brand";v="24", "Google Chrome";v="152"',
         'sec-ch-ua-mobile': '?0',
         'sec-ch-ua-platform': '"Windows"'
@@ -119,20 +112,14 @@ const getHeaders = (token = null) => {
     return headers;
 };
 
-/**
- * Build HTML email body for check-in/check-out API response
- * @param {string} type - 'check-in' or 'check-out'
- * @param {boolean} success - Whether the API call succeeded
- * @param {Object} data - API response or error payload
- * @returns {string} HTML string
- */
 function buildNotificationEmailBody(type, success, data) {
     const actionLabel = type === 'check-in' ? 'Check-in' : 'Check-out';
     const statusLabel = success ? 'Success' : 'Failed';
     const statusColor = success ? '#198754' : '#dc3545';
     const timestamp = new Date().toLocaleString('en-PK', {
         dateStyle: 'full',
-        timeStyle: 'long'
+        timeStyle: 'long',
+        timeZone: 'Asia/Karachi'
     });
     const jsonPretty = typeof data === 'object'
         ? JSON.stringify(data, null, 2)
@@ -184,13 +171,6 @@ function buildNotificationEmailBody(type, success, data) {
 </html>`;
 }
 
-/**
- * Send Gmail notification with check-in/check-out API response
- * @param {string} type - 'check-in' or 'check-out'
- * @param {boolean} success - Whether the API call succeeded
- * @param {Object} data - API response or error payload
- * @returns {Promise<void>}
- */
 async function sendNotificationEmail(type, success, data) {
     if (!GMAIL.appPassword) {
         console.warn('⚠️  APP_PASS / GMAIL_APP_PASSWORD not set – skipping email notification');
@@ -199,7 +179,7 @@ async function sendNotificationEmail(type, success, data) {
 
     const actionLabel = type === 'check-in' ? 'Check-in' : 'Check-out';
     const statusLabel = success ? 'Success' : 'Failed';
-    const subject = `[Attendance] ${actionLabel} – ${statusLabel} – ${new Date().toLocaleDateString()}`;
+    const subject = `[Attendance] ${actionLabel} – ${statusLabel} – ${getPKTDateString()}`;
 
     const transporter = nodemailer.createTransport({
         host: 'smtp.gmail.com',
@@ -225,10 +205,6 @@ async function sendNotificationEmail(type, success, data) {
     }
 }
 
-/**
- * Authenticate and get access token
- * @returns {Promise<string|null>} Access token or null if failed
- */
 async function getAuthToken() {
     try {
         console.log('🔐 Attempting to login...');
@@ -240,11 +216,10 @@ async function getAuthToken() {
             },
             {
                 headers: getHeaders(),
-                timeout: 10000 // 10 second timeout
+                timeout: 10000
             }
         );
 
-        // Try different possible token locations in response
         const token = response.data?.token || 
                      response.data?.accessToken || 
                      response.data?.data?.token ||
@@ -272,11 +247,6 @@ async function getAuthToken() {
     }
 }
 
-/**
- * Get current attendance ID from status API for check-out
- * @param {string} token - Authentication token
- * @returns {Promise<number|null>} Attendance ID or null
- */
 async function getCurrentAttendanceId(token) {
     try {
         console.log('📋 Fetching attendance status...');
@@ -288,7 +258,6 @@ async function getCurrentAttendanceId(token) {
             }
         );
 
-        // Extract attendance ID from response
         const attendanceId = response.data?.data?.id || 
                              response.data?.id || 
                              response.data?.attendanceId ||
@@ -314,17 +283,12 @@ async function getCurrentAttendanceId(token) {
     }
 }
 
-/**
- * Mark attendance (check-in or check-out)
- * @param {string} type - 'check-in' or 'check-out'
- */
 async function markAttendance(type) {
     console.log(`\n${'='.repeat(60)}`);
-    console.log(`🕐 ${new Date().toLocaleString()}`);
+    console.log(`🕐 ${new Date().toLocaleString('en-PK', { timeZone: 'Asia/Karachi' })}`);
     console.log(`📝 Starting ${type.toUpperCase()} process...`);
     console.log('='.repeat(60));
 
-    // Get authentication token
     const token = await getAuthToken();
     if (!token) {
         console.error('❌ Cannot proceed without authentication token');
@@ -337,7 +301,6 @@ async function markAttendance(type) {
     if (type === 'check-in') {
         url = `${CONFIG.baseUrl}/api/organizations/${CONFIG.organizationId}/attendance/employee/${CONFIG.employeeId}/check-in`;
     } else if (type === 'check-out') {
-        // For check-out, get attendance ID from status API
         attendanceId = await getCurrentAttendanceId(token);
         
         if (!attendanceId) {
@@ -356,10 +319,9 @@ async function markAttendance(type) {
     try {
         console.log(`📤 Sending ${type} request...`);
         
-        // Prepare request body
         const requestBody = type === 'check-in' 
             ? {
-                date: new Date().toISOString().split('T')[0], // Format: YYYY-MM-DD
+                date: getPKTDateString(),
                 location: CONFIG.location,
                 medium: CONFIG.medium,
                 ip: null
@@ -386,7 +348,6 @@ async function markAttendance(type) {
         console.log(`✅ Successfully ${type === 'check-in' ? 'Checked In' : 'Checked Out'}!`);
         console.log('📄 Response:', JSON.stringify(response.data, null, 2));
         
-        // Log to file for record keeping
         const logEntry = {
             timestamp: new Date().toISOString(),
             type: type,
@@ -395,7 +356,6 @@ async function markAttendance(type) {
         };
         logToFile(logEntry);
 
-        // Send Gmail notification with API response
         await sendNotificationEmail(type, true, response.data);
 
         return true;
@@ -410,7 +370,6 @@ async function markAttendance(type) {
             console.error('   Error:', error.message);
         }
 
-        // Log error to file
         const logEntry = {
             timestamp: new Date().toISOString(),
             type: type,
@@ -419,7 +378,6 @@ async function markAttendance(type) {
         };
         logToFile(logEntry);
 
-        // Send Gmail notification with error payload
         const errorPayload = error.response?.data || { message: error.message, status: error.response?.status };
         await sendNotificationEmail(type, false, errorPayload);
 
@@ -427,17 +385,13 @@ async function markAttendance(type) {
     }
 }
 
-/**
- * Log attendance attempts to a file
- * @param {Object} entry - Log entry object
- */
 function logToFile(entry) {
     const logDir = path.join(__dirname, 'logs');
     if (!fs.existsSync(logDir)) {
         fs.mkdirSync(logDir, { recursive: true });
     }
 
-    const logFile = path.join(logDir, `attendance-${new Date().toISOString().split('T')[0]}.json`);
+    const logFile = path.join(logDir, `attendance-${getPKTDateString()}.json`);
     let logs = [];
 
     if (fs.existsSync(logFile)) {
@@ -455,7 +409,6 @@ function logToFile(entry) {
 const action = process.argv[2];
 
 if (action === 'check-in' || action === 'check-out') {
-    // Check if it's a weekday
     if (!isWeekday()) {
         console.log('ℹ️  Today is not a weekday (Monday-Friday). Skipping attendance.');
         process.exit(0);
@@ -469,14 +422,9 @@ if (action === 'check-in' || action === 'check-out') {
         process.exit(0);
     }
 
-    // Wait for random time within the window
     (async () => {
         try {
-            if (action === 'check-in') {
-                // Random delay between 0-5 minutes
-                await waitRandomTime(0, 5);
-            } else if (action === 'check-out') {
-                // Random delay between 0-5 minutes
+            if (action === 'check-in' || action === 'check-out') {
                 await waitRandomTime(0, 5);
             }
 
@@ -495,9 +443,5 @@ if (action === 'check-in' || action === 'check-out') {
     })();
 } else {
     console.log('Usage: node attendance.js [check-in|check-out]');
-    console.log('\nExamples:');
-    console.log('  node attendance.js check-in   # Mark attendance for the day');
-    console.log('  node attendance.js check-out  # Mark check-out for the day');
     process.exit(1);
 }
-
