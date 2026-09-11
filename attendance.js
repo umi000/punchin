@@ -112,6 +112,16 @@ const getHeaders = (token = null) => {
     return headers;
 };
 
+function isCloudflareChallengePayload(payload) {
+    if (!payload) return false;
+
+    const text = typeof payload === 'string'
+        ? payload
+        : JSON.stringify(payload);
+
+    return /Just a moment|cf_chl|challenge-platform|Enable JavaScript and cookies|Access denied/i.test(text);
+}
+
 function buildNotificationEmailBody(type, success, data) {
     const actionLabel = type === 'check-in' ? 'Check-in' : 'Check-out';
     const statusLabel = success ? 'Success' : 'Failed';
@@ -237,7 +247,14 @@ async function getAuthToken() {
         console.error('❌ Login Failed:');
         if (error.response) {
             console.error('   Status:', error.response.status);
-            console.error('   Data:', JSON.stringify(error.response.data, null, 2));
+
+            if (isCloudflareChallengePayload(error.response.data)) {
+                console.error('   Cloudflare challenge detected: the endpoint is blocking automated requests before authentication.');
+                console.error('   This is not a bad email/password issue; the API is returning the browser challenge page.');
+                console.error('   Use a real browser session or the portal auth flow instead of direct curl/axios calls from GitHub Actions.');
+            } else {
+                console.error('   Data:', JSON.stringify(error.response.data, null, 2));
+            }
         } else if (error.request) {
             console.error('   No response received:', error.message);
         } else {
@@ -363,7 +380,12 @@ async function markAttendance(type) {
         console.error(`❌ ${type} Request Failed:`);
         if (error.response) {
             console.error('   Status:', error.response.status);
-            console.error('   Data:', JSON.stringify(error.response.data, null, 2));
+            if (isCloudflareChallengePayload(error.response.data)) {
+                console.error('   Cloudflare challenge detected: the API is blocking automated requests before the action can complete.');
+                console.error('   This is an anti-bot page, not a normal API failure.');
+            } else {
+                console.error('   Data:', JSON.stringify(error.response.data, null, 2));
+            }
         } else if (error.request) {
             console.error('   No response received:', error.message);
         } else {
