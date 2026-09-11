@@ -13,12 +13,44 @@ function sleep(ms) {
 }
 
 /**
- * Check if today is a weekday (Monday-Friday)
+ * Current hour/minute/weekday in Pakistan Standard Time
+ */
+function getPKTParts() {
+    const parts = new Intl.DateTimeFormat('en-GB', {
+        timeZone: 'Asia/Karachi',
+        weekday: 'short',
+        hour: '2-digit',
+        minute: '2-digit',
+        hourCycle: 'h23'
+    }).formatToParts(new Date());
+    const map = Object.fromEntries(parts.map((p) => [p.type, p.value]));
+    return {
+        weekday: map.weekday,
+        hour: Number(map.hour),
+        minute: Number(map.minute)
+    };
+}
+
+/**
+ * Check if today is a weekday in PKT (Monday-Friday)
  * @returns {boolean}
  */
 function isWeekday() {
-    const day = new Date().getDay();
-    return day >= 1 && day <= 5; // Monday = 1, Friday = 5
+    const { weekday } = getPKTParts();
+    return !['Sat', 'Sun'].includes(weekday);
+}
+
+/**
+ * Scheduled GitHub runs may fire many hours late. Only punch during the
+ * intended PKT window. Manual workflow_dispatch is not gated.
+ */
+function isWithinScheduledWindow(action) {
+    const { hour, minute } = getPKTParts();
+    const now = hour * 60 + minute;
+    if (action === 'check-in') {
+        return now >= (7 * 60 + 30) && now < (10 * 60);
+    }
+    return now >= (18 * 60) && now < (20 * 60 + 30);
 }
 
 /**
@@ -415,7 +447,6 @@ function logToFile(entry) {
             logs = [];
         }
     }
-
     logs.push(entry);
     fs.writeFileSync(logFile, JSON.stringify(logs, null, 2));
 }
@@ -430,6 +461,14 @@ if (action === 'check-in' || action === 'check-out') {
         process.exit(0);
     }
 
+    const isScheduled = process.env.GITHUB_EVENT_NAME === 'schedule';
+    if (isScheduled && !isWithinScheduledWindow(action)) {
+        const { hour, minute } = getPKTParts();
+        const window = action === 'check-in' ? '07:30–10:00' : '18:00–20:30';
+        console.log(`ℹ️  ${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')} PKT is outside ${window} PKT. Skipping scheduled ${action}.`);
+        process.exit(0);
+    }
+
     // Wait for random time within the window
     (async () => {
         try {
@@ -439,6 +478,11 @@ if (action === 'check-in' || action === 'check-out') {
             } else if (action === 'check-out') {
                 // Random delay between 0-5 minutes
                 await waitRandomTime(0, 5);
+            }
+
+            if (isScheduled && !isWithinScheduledWindow(action)) {
+                console.log('ℹ️  Random wait pushed this run outside the PKT window. Skipping.');
+                process.exit(0);
             }
 
             await markAttendance(action);
