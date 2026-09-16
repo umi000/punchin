@@ -43,15 +43,6 @@ function isWeekday() {
     return !['Sat', 'Sun'].includes(weekday);
 }
 
-function isWithinScheduledWindow(action) {
-    const { hour, minute } = getPKTParts();
-    const now = hour * 60 + minute;
-    if (action === 'check-in') {
-        return now >= (7 * 60 + 30) && now < (10 * 60);
-    }
-    return now >= (18 * 60) && now < (20 * 60 + 30);
-}
-
 async function waitRandomTime(minMinutes, maxMinutes) {
     const minMs = minMinutes * 60 * 1000;
     const maxMs = maxMinutes * 60 * 1000;
@@ -520,21 +511,8 @@ if (action === 'check-in' || action === 'check-out') {
         process.exit(0);
     }
 
-    const isScheduled = process.env.GITHUB_EVENT_NAME === 'schedule';
-    if (isScheduled && !isWithinScheduledWindow(action)) {
-        const { hour, minute } = getPKTParts();
-        const window = action === 'check-in' ? '07:30–10:00' : '18:00–20:30';
-        console.log(`ℹ️  ${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')} PKT is outside ${window} PKT. Skipping scheduled ${action}.`);
-        process.exit(0);
-    }
-
     (async () => {
         try {
-            if (isScheduled && !isWithinScheduledWindow(action)) {
-                console.log('ℹ️  Current time is outside the PKT window. Skipping.');
-                process.exit(0);
-            }
-
             await markAttendance(action);
             console.log('\n✅ Process completed successfully!');
             process.exit(0);
